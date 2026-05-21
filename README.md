@@ -64,36 +64,58 @@ page-level FTS5, then optional graph-walk expansion.
 Storage moves between machines via `git push` of the wiki dir +
 `sqlite3 .backup` of the DB, or just `rsync` of the data dir.
 
-## Quick start (M0)
+## Quick start
 
-Requires Rust 1.95+. Currently exercises only `init` / `status` — the
-MCP server lands in M2.
+Requires Rust 1.95+. Three ways to run it, in increasing order of
+"homelab-ready":
 
-```bash
-# Build.
-cargo build --workspace
-
-# Create the data directory layout.
-./target/debug/ai-memory init
-
-# Or override the location.
-AI_MEMORY_DATA_DIR=/srv/ai-memory ./target/debug/ai-memory init
-
-# Inspect.
-./target/debug/ai-memory status --json
-```
-
-After M2, the MCP server will be attachable via:
+### Local: cargo build
 
 ```bash
-claude mcp add ai-memory -- ai-memory serve --transport stdio
+# Build, init, and run the MCP server over stdio (attach with claude mcp).
+cargo build --release --workspace
+./target/release/ai-memory init
+claude mcp add ai-memory -- ./target/release/ai-memory serve --transport stdio
 ```
 
-After M2.5, the Docker quick-start will be:
+Or with HTTP transport for `mcp-inspector` / curl / a remote Claude Code:
 
 ```bash
-docker run -v ai-memory:/data -p 7777:7777 ghcr.io/akitaonrails/ai-memory:latest
+./target/release/ai-memory serve --transport http --bind 127.0.0.1:7777
 ```
+
+### Local: Docker Compose
+
+```bash
+docker compose -f docker/docker-compose.yml up -d --build
+# State lives in the `ai-memory-data` named volume.
+# Attach Claude Code at http://localhost:7777/mcp
+```
+
+### Other CLI commands
+
+```bash
+./target/release/ai-memory --help              # full subcommand list
+./target/release/ai-memory init                # create the data dir layout
+./target/release/ai-memory write-page \
+    --path notes/foo.md --title Foo --body "..." # exercise the wiki write
+./target/release/ai-memory search "karpathy"   # FTS5 query
+./target/release/ai-memory recent              # (M2-B) most-recent pages
+./target/release/ai-memory status --json       # counts + paths
+./target/release/ai-memory watch               # standalone filesystem watcher
+./target/release/ai-memory serve               # MCP server (stdio default)
+./target/release/ai-memory reset --confirm     # wipe data (refuses if siblings alive)
+```
+
+### Override the data dir
+
+```bash
+AI_MEMORY_DATA_DIR=/srv/ai-memory ./target/release/ai-memory init
+```
+
+Default location is `dirs::data_local_dir().join("ai-memory")` —
+`~/.local/share/ai-memory` on Linux, `~/Library/Application Support/ai-memory`
+on macOS.
 
 ## Docs
 

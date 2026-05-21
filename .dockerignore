@@ -1,0 +1,20 @@
+# Build artefacts.
+target/
+**/target/
+
+# Local state.
+.local-data/
+*.log
+flamegraph.svg
+perf.data*
+
+# VCS internals — Docker build doesn't need them.
+.git/
+
+# Editor / OS.
+.idea/
+.vscode/
+.DS_Store
+
+# Sandbox marker.
+.ai-jail
