@@ -11,7 +11,11 @@ use ai_memory_store::Store;
 use ai_memory_web;
 use ai_memory_wiki::{WatcherHandle, Wiki};
 use anyhow::{Context, Result};
-use axum::extract::DefaultBodyLimit;
+use axum::body::Body;
+use axum::extract::{DefaultBodyLimit, State};
+use axum::http::{Request, StatusCode, header};
+use axum::middleware::Next;
+use axum::response::{IntoResponse, Response};
 use rmcp::ServiceExt;
 use rmcp::transport::stdio;
 use rmcp::transport::streamable_http_server::{
@@ -232,6 +236,10 @@ pub async fn run(config: &Config, args: ServeArgs) -> Result<()> {
                     auth_state,
                     require_bearer,
                 ))
+                .layer(axum::middleware::from_fn_with_state(
+                    Arc::new(config.allowed_hosts.clone()),
+                    require_allowed_host,
+                ))
                 .layer(DefaultBodyLimit::max(MAX_BODY_BYTES));
             let listener = tokio::net::TcpListener::bind(&bind)
                 .await
@@ -264,4 +272,66 @@ pub async fn run(config: &Config, args: ServeArgs) -> Result<()> {
         }
     }
     Ok(())
+}
+
+async fn require_allowed_host(
+    State(allowed_hosts): State<Arc<Vec<String>>>,
+    req: Request<Body>,
+    next: Next,
+) -> Response {
+    let Some(host) = req
+        .headers()
+        .get(header::HOST)
+        .and_then(|h| h.to_str().ok())
+    else {
+        return (StatusCode::BAD_REQUEST, "missing Host header\n").into_response();
+    };
+    if host_allowed(host, &allowed_hosts) {
+        return next.run(req).await;
+    }
+    tracing::warn!(host, allowed = ?allowed_hosts, "rejected request with disallowed Host header");
+    (StatusCode::FORBIDDEN, "forbidden host\n").into_response()
+}
+
+fn host_allowed(host: &str, allowed_hosts: &[String]) -> bool {
+    allowed_hosts.iter().any(|allowed| {
+        host.eq_ignore_ascii_case(allowed) || host_without_port(host).eq_ignore_ascii_case(allowed)
+    })
+}
+
+fn host_without_port(host: &str) -> &str {
+    if let Some(rest) = host.strip_prefix('[')
+        && let Some((inside, _)) = rest.split_once(']')
+    {
+        return inside;
+    }
+    match host.rsplit_once(':') {
+        Some((name, port)) if !name.contains(':') && port.chars().all(|c| c.is_ascii_digit()) => {
+            name
+        }
+        _ => host,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn host_allowed_accepts_host_with_port() {
+        let allowed = vec!["127.0.0.1".to_string(), "localhost".to_string()];
+        assert!(host_allowed("127.0.0.1:49374", &allowed));
+        assert!(host_allowed("localhost", &allowed));
+    }
+
+    #[test]
+    fn host_allowed_rejects_unknown_host() {
+        let allowed = vec!["127.0.0.1".to_string()];
+        assert!(!host_allowed("evil.example:49374", &allowed));
+    }
+
+    #[test]
+    fn host_without_port_handles_ipv6_loopback() {
+        assert_eq!(host_without_port("[::1]:49374"), "::1");
+    }
 }

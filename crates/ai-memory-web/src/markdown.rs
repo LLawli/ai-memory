@@ -2,13 +2,13 @@
 //!
 //! Stub at scaffold time; full implementation in the next step.
 
-use pulldown_cmark::{Options, Parser, html};
+use pulldown_cmark::{CowStr, Event, Options, Parser, Tag, html};
 
 /// Render a markdown body to HTML using GFM-ish defaults.
 ///
-/// v1: trust the wiki source (the wiki is on-disk markdown the
-/// project owner writes/consolidates; not user-uploaded content from
-/// arbitrary callers). Syntax highlighting is deferred.
+/// Raw HTML is escaped and unsafe link/image schemes are neutralised.
+/// Wiki content can be derived from prompts, hooks, or LLM output, so
+/// the browser surface must treat it as untrusted.
 #[must_use]
 pub fn render(body: &str) -> String {
     let mut opts = Options::empty();
@@ -17,9 +17,78 @@ pub fn render(body: &str) -> String {
     opts.insert(Options::ENABLE_STRIKETHROUGH);
     opts.insert(Options::ENABLE_TASKLISTS);
     opts.insert(Options::ENABLE_SMART_PUNCTUATION);
-    let parser = Parser::new_ext(body, opts);
+    let parser = Parser::new_ext(body, opts).map(sanitize_event);
     let mut out = String::with_capacity(body.len() + body.len() / 4);
     html::push_html(&mut out, parser);
+    out
+}
+
+fn sanitize_event(event: Event<'_>) -> Event<'_> {
+    match event {
+        Event::Html(s) | Event::InlineHtml(s) => Event::Text(s),
+        Event::Start(Tag::Link {
+            link_type,
+            dest_url,
+            title,
+            id,
+        }) => Event::Start(Tag::Link {
+            link_type,
+            dest_url: safe_url(dest_url),
+            title,
+            id,
+        }),
+        Event::Start(Tag::Image {
+            link_type,
+            dest_url,
+            title,
+            id,
+        }) => Event::Start(Tag::Image {
+            link_type,
+            dest_url: safe_url(dest_url),
+            title,
+            id,
+        }),
+        other => other,
+    }
+}
+
+fn safe_url(url: CowStr<'_>) -> CowStr<'_> {
+    let trimmed = url.trim_start();
+    let lower = trimmed.to_ascii_lowercase();
+    if lower.starts_with("http://")
+        || lower.starts_with("https://")
+        || lower.starts_with("mailto:")
+        || lower.starts_with('/')
+        || lower.starts_with('#')
+        || !lower.contains(':')
+    {
+        url
+    } else {
+        CowStr::Boxed("#".into())
+    }
+}
+
+/// Escape text for insertion into an HTML template while preserving the
+/// fixed `<mark>` tags emitted by SQLite FTS snippets.
+#[must_use]
+pub fn escape_snippet(snippet: &str) -> String {
+    escape_html(snippet)
+        .replace("&lt;mark&gt;", "<mark>")
+        .replace("&lt;/mark&gt;", "</mark>")
+}
+
+fn escape_html(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for c in input.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            _ => out.push(c),
+        }
+    }
     out
 }
 
@@ -67,6 +136,27 @@ mod tests {
         let html = render(md);
         assert!(html.contains("<table>"));
         assert!(html.contains("<td>1</td>"));
+    }
+
+    #[test]
+    fn escapes_raw_html() {
+        let html = render("<script>alert(1)</script>");
+        assert!(html.contains("&lt;script&gt;alert(1)&lt;/script&gt;"));
+        assert!(!html.contains("<script>"));
+    }
+
+    #[test]
+    fn neutralises_javascript_links() {
+        let html = render("[x](javascript:alert(1))");
+        assert!(html.contains("href=\"#\""));
+        assert!(!html.contains("javascript:"));
+    }
+
+    #[test]
+    fn escapes_search_snippet_but_keeps_marks() {
+        let out = escape_snippet("<script>x</script> <mark>hit</mark>");
+        assert!(out.contains("&lt;script&gt;x&lt;/script&gt;"));
+        assert!(out.contains("<mark>hit</mark>"));
     }
 
     #[test]

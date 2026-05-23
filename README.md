@@ -271,8 +271,9 @@ See [`docs/deploy.md`](docs/deploy.md) for the full homelab pattern
 ### DNS-rebinding guard (`AI_MEMORY_ALLOWED_HOSTS`)
 
 Any non-loopback bind also needs `AI_MEMORY_ALLOWED_HOSTS` set to the
-host/IP the clients will use, otherwise the rmcp server rejects
-external `Host` headers with 403:
+host/IP the clients will use, otherwise the HTTP server rejects
+external `Host` headers with 403 before they reach `/mcp`, `/hook`,
+`/handoff`, `/admin/*`, or `/web/*`:
 
 ```bash
 -e AI_MEMORY_ALLOWED_HOSTS="<server-ip>,localhost,127.0.0.1"

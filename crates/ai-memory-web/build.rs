@@ -15,7 +15,11 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::SystemTime;
 
+use sha2::{Digest, Sha256};
+
 const TAILWIND_VERSION: &str = "3.4.17";
+const TAILWIND_LINUX_X64_SHA256: &str =
+    "7d24f7fa191d2193b78cd5f5a42a6093e14409521908529f42d80b11fde1f1d4";
 
 fn main() {
     // Re-run triggers.
@@ -103,9 +107,16 @@ fn mtime(p: &Path) -> std::io::Result<SystemTime> {
 
 /// Platform-specific download URL for the Tailwind CLI binary.
 fn tailwind_url() -> String {
+    let slug = tailwind_slug();
+    format!(
+        "https://github.com/tailwindlabs/tailwindcss/releases/download/v{TAILWIND_VERSION}/{slug}"
+    )
+}
+
+fn tailwind_slug() -> &'static str {
     let os = std::env::consts::OS;
     let arch = std::env::consts::ARCH;
-    let slug = match (os, arch) {
+    match (os, arch) {
         ("linux", "x86_64") => "tailwindcss-linux-x64",
         ("linux", "aarch64") => "tailwindcss-linux-arm64",
         ("macos", "x86_64") => "tailwindcss-macos-x64",
@@ -114,10 +125,34 @@ fn tailwind_url() -> String {
         _ => panic!(
             "Unsupported platform {os}/{arch} — set TAILWIND_SKIP=1 and provide static/tailwind.css manually"
         ),
-    };
-    format!(
-        "https://github.com/tailwindlabs/tailwindcss/releases/download/v{TAILWIND_VERSION}/{slug}"
-    )
+    }
+}
+
+fn expected_tailwind_sha256() -> &'static str {
+    match tailwind_slug() {
+        "tailwindcss-linux-x64" => TAILWIND_LINUX_X64_SHA256,
+        other => panic!(
+            "No pinned Tailwind SHA-256 for {other}. Set TAILWIND_SKIP=1 and provide static/tailwind.css manually."
+        ),
+    }
+}
+
+fn verify_tailwind_checksum(path: &Path) {
+    let expected = expected_tailwind_sha256();
+    let bytes = std::fs::read(path).unwrap_or_else(|e| {
+        panic!(
+            "failed reading downloaded Tailwind binary {}: {e}",
+            path.display()
+        )
+    });
+    let got = format!("{:x}", Sha256::digest(&bytes));
+    if got != expected {
+        let _ = std::fs::remove_file(path);
+        panic!(
+            "Tailwind CSS CLI checksum mismatch for {}: expected {expected}, got {got}",
+            path.display()
+        );
+    }
 }
 
 /// Download the Tailwind CLI and return the path to the executable.
@@ -138,7 +173,7 @@ fn download_tailwind(out_dir: &Path) -> PathBuf {
     let dest = cache_dir.join(&bin_name);
 
     if dest.exists() {
-        // Already cached.
+        verify_tailwind_checksum(&dest);
         return dest;
     }
 
@@ -155,6 +190,8 @@ fn download_tailwind(out_dir: &Path) -> PathBuf {
              tailwind.css in crates/ai-memory-web/static/tailwind.css."
         );
     }
+
+    verify_tailwind_checksum(&dest);
 
     // Make executable on Unix.
     #[cfg(unix)]

@@ -284,6 +284,12 @@ pub struct StatusArgs {
 pub struct SearchArgs {
     /// FTS5 query string (e.g. `"karpathy wiki"` or `quick OR slow`).
     pub query: String,
+    /// Workspace name. Defaults to `default`.
+    #[arg(long, default_value = "default")]
+    pub workspace: String,
+    /// Project name. When omitted, auto-derived from the current project.
+    #[arg(long)]
+    pub project: Option<String>,
     /// Maximum number of hits to return.
     #[arg(short = 'n', long, default_value_t = 10)]
     pub limit: usize,

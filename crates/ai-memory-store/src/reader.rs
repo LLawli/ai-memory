@@ -265,6 +265,65 @@ impl ReaderPool {
         .await
     }
 
+    /// Run a full-text search scoped to one project.
+    ///
+    /// # Errors
+    /// Propagates any SQL or pool error.
+    pub async fn search_pages_for_project(
+        &self,
+        workspace_id: WorkspaceId,
+        project_id: ProjectId,
+        query: String,
+        limit: usize,
+    ) -> StoreResult<Vec<PageHit>> {
+        self.with_conn(move |conn| {
+            let mut stmt = conn.prepare(
+                "SELECT pages.id, pages.path, pages.title, \
+                        snippet(pages_fts, 1, '<mark>', '</mark>', '…', 24) AS snip, \
+                        pages_fts.rank \
+                 FROM pages_fts \
+                 JOIN pages ON pages.rowid = pages_fts.rowid \
+                 WHERE pages_fts MATCH ?1 \
+                   AND pages.workspace_id = ?2 \
+                   AND pages.project_id = ?3 \
+                   AND pages.is_latest = 1 \
+                 ORDER BY pages_fts.rank \
+                 LIMIT ?4",
+            )?;
+            #[allow(clippy::cast_possible_wrap)]
+            let rows = stmt.query_map(
+                params![
+                    query,
+                    workspace_id.as_bytes(),
+                    project_id.as_bytes(),
+                    limit as i64
+                ],
+                |row| {
+                    let id_bytes: Vec<u8> = row.get(0)?;
+                    let path: String = row.get(1)?;
+                    let title: String = row.get(2)?;
+                    let snippet: String = row.get(3)?;
+                    let rank: f64 = row.get(4)?;
+                    Ok((id_bytes, path, title, snippet, rank))
+                },
+            )?;
+
+            let mut hits = Vec::new();
+            for row in rows {
+                let (id_bytes, path, title, snippet, rank) = row?;
+                hits.push(PageHit {
+                    id: PageId::from_slice(&id_bytes)?,
+                    path: PagePath::new(path)?,
+                    title,
+                    snippet,
+                    rank,
+                });
+            }
+            Ok(hits)
+        })
+        .await
+    }
+
     /// Return the N most-recently-updated `is_latest = 1` pages.
     ///
     /// # Errors
@@ -289,6 +348,54 @@ impl ReaderPool {
                 let rank: f64 = row.get(4)?;
                 Ok((id_bytes, path, title, snippet, rank))
             })?;
+            let mut hits = Vec::new();
+            for row in rows {
+                let (id_bytes, path, title, snippet, rank) = row?;
+                hits.push(PageHit {
+                    id: PageId::from_slice(&id_bytes)?,
+                    path: PagePath::new(path)?,
+                    title,
+                    snippet,
+                    rank,
+                });
+            }
+            Ok(hits)
+        })
+        .await
+    }
+
+    /// Return the N most-recently-updated pages scoped to one project.
+    ///
+    /// # Errors
+    /// Propagates any SQL or pool error.
+    pub async fn recent_pages_for_project(
+        &self,
+        workspace_id: WorkspaceId,
+        project_id: ProjectId,
+        limit: usize,
+    ) -> StoreResult<Vec<PageHit>> {
+        self.with_conn(move |conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id, path, title, \
+                        substr(body, 1, 240) AS snip, \
+                        CAST(updated_at AS REAL) AS rank \
+                 FROM pages \
+                 WHERE workspace_id = ?1 AND project_id = ?2 AND is_latest = 1 \
+                 ORDER BY updated_at DESC \
+                 LIMIT ?3",
+            )?;
+            #[allow(clippy::cast_possible_wrap)]
+            let rows = stmt.query_map(
+                params![workspace_id.as_bytes(), project_id.as_bytes(), limit as i64],
+                |row| {
+                    let id_bytes: Vec<u8> = row.get(0)?;
+                    let path: String = row.get(1)?;
+                    let title: String = row.get(2)?;
+                    let snippet: String = row.get(3)?;
+                    let rank: f64 = row.get(4)?;
+                    Ok((id_bytes, path, title, snippet, rank))
+                },
+            )?;
             let mut hits = Vec::new();
             for row in rows {
                 let (id_bytes, path, title, snippet, rank) = row?;
@@ -522,7 +629,9 @@ impl ReaderPool {
         limit: usize,
     ) -> StoreResult<Vec<PageHit>> {
         // Fetch FTS5 hits first.
-        let fts_hits = self.search_pages(query, limit * 2).await?;
+        let fts_hits = self
+            .search_pages_for_project(workspace_id, project_id, query, limit * 2)
+            .await?;
         let Some(qv) = query_vec else {
             // No query vector → pure FTS5.
             let mut out = fts_hits;
@@ -760,6 +869,141 @@ impl ReaderPool {
                 rules,
                 recent_pages,
             })
+        })
+        .await
+    }
+
+    /// Assemble a project-scoped [`BriefingSnapshot`].
+    ///
+    /// # Errors
+    /// Propagates any SQL or pool error.
+    #[allow(clippy::too_many_lines)]
+    pub async fn briefing_for_project(
+        &self,
+        workspace_id: WorkspaceId,
+        project_id: ProjectId,
+        recent_pages_limit: usize,
+    ) -> StoreResult<BriefingSnapshot> {
+        let recent_limit = recent_pages_limit.clamp(1, 100) as i64;
+        self.with_conn(move |conn| {
+            let now_us = jiff::Timestamp::now().as_microsecond();
+            let day_us: i64 = 86_400 * 1_000_000;
+            let cutoff_7d = now_us - 7 * day_us;
+            let cutoff_30d = now_us - 30 * day_us;
+
+            let counts = StatusCounts {
+                pages_latest: count_project(
+                    conn,
+                    "SELECT COUNT(*) FROM pages WHERE workspace_id = ?1 AND project_id = ?2 AND is_latest = 1",
+                    workspace_id,
+                    project_id,
+                )?,
+                pages_all: count_project(
+                    conn,
+                    "SELECT COUNT(*) FROM pages WHERE workspace_id = ?1 AND project_id = ?2",
+                    workspace_id,
+                    project_id,
+                )?,
+                sessions: count_project(
+                    conn,
+                    "SELECT COUNT(*) FROM sessions WHERE workspace_id = ?1 AND project_id = ?2",
+                    workspace_id,
+                    project_id,
+                )?,
+                observations: count_project(
+                    conn,
+                    "SELECT COUNT(*) FROM observations WHERE workspace_id = ?1 AND project_id = ?2",
+                    workspace_id,
+                    project_id,
+                )?,
+            };
+
+            let activity_7d = window_activity_project(conn, 7, cutoff_7d, workspace_id, project_id)?;
+            let activity_30d = window_activity_project(conn, 30, cutoff_30d, workspace_id, project_id)?;
+
+            let last_observation_at: Option<i64> = conn
+                .query_row(
+                    "SELECT MAX(created_at) FROM observations WHERE workspace_id = ?1 AND project_id = ?2",
+                    params![workspace_id.as_bytes(), project_id.as_bytes()],
+                    |row| row.get::<_, Option<i64>>(0),
+                )
+                .optional()?
+                .flatten();
+            let last_observation_at = last_observation_at
+                .and_then(|us| jiff::Timestamp::from_microsecond(us).ok())
+                .map(|ts| ts.to_string());
+
+            let pending_handoff_count = count_project(
+                conn,
+                "SELECT COUNT(*) FROM handoffs WHERE workspace_id = ?1 AND project_id = ?2 AND state = 'open'",
+                workspace_id,
+                project_id,
+            )?;
+
+            let mut rules_stmt = conn.prepare(
+                "SELECT path, title, \
+                        COALESCE(json_extract(frontmatter_json, '$.kind'), 'fact') AS kind, \
+                        updated_at \
+                 FROM pages \
+                 WHERE workspace_id = ?1 AND project_id = ?2 AND is_latest = 1 AND path LIKE '_rules/%' \
+                 ORDER BY updated_at DESC",
+            )?;
+            let rules: Vec<BriefingPage> = rules_stmt
+                .query_map(params![workspace_id.as_bytes(), project_id.as_bytes()], briefing_page_from_row)?
+                .collect::<Result<Vec<_>, _>>()?
+                .into_iter()
+                .collect::<Result<Vec<_>, _>>()?;
+
+            let mut recent_stmt = conn.prepare(
+                "SELECT path, title, \
+                        COALESCE(json_extract(frontmatter_json, '$.kind'), 'fact') AS kind, \
+                        updated_at \
+                 FROM pages \
+                 WHERE workspace_id = ?1 AND project_id = ?2 AND is_latest = 1 \
+                 ORDER BY updated_at DESC \
+                 LIMIT ?3",
+            )?;
+            let recent_pages: Vec<BriefingPage> = recent_stmt
+                .query_map(params![workspace_id.as_bytes(), project_id.as_bytes(), recent_limit], briefing_page_from_row)?
+                .collect::<Result<Vec<_>, _>>()?
+                .into_iter()
+                .collect::<Result<Vec<_>, _>>()?;
+
+            Ok(BriefingSnapshot {
+                counts,
+                activity_7d,
+                activity_30d,
+                last_observation_at,
+                pending_handoff_count,
+                rules,
+                recent_pages,
+            })
+        })
+        .await
+    }
+
+    /// Look up a page's workspace and project names by page id.
+    ///
+    /// # Errors
+    /// Propagates any SQL or pool error.
+    pub async fn page_meta_by_id(&self, page_id: PageId) -> StoreResult<Option<PageMeta>> {
+        self.with_conn(move |conn| {
+            let row_opt = conn
+                .query_row(
+                    "SELECT w.name, p.name, w.id, p.id, pg.path, pg.title, \
+                            COALESCE(json_extract(pg.frontmatter_json, '$.kind'), 'fact'), \
+                            pg.tier, pg.pinned, pg.created_at, pg.updated_at, \
+                            sp.path AS supersedes_path \
+                     FROM pages pg \
+                     JOIN projects p ON p.id = pg.project_id \
+                     JOIN workspaces w ON w.id = pg.workspace_id \
+                     LEFT JOIN pages sp ON sp.id = pg.supersedes \
+                     WHERE pg.id = ?1 AND pg.is_latest = 1",
+                    params![page_id.as_bytes()],
+                    page_meta_from_row,
+                )
+                .optional()?;
+            row_opt.transpose()
         })
         .await
     }
@@ -1143,6 +1387,92 @@ impl ReaderPool {
         })
         .await
     }
+
+    /// Return aggregate counts scoped to one project.
+    ///
+    /// # Errors
+    /// Propagates any SQL or pool error.
+    pub async fn status_counts_for_project(
+        &self,
+        workspace_id: WorkspaceId,
+        project_id: ProjectId,
+    ) -> StoreResult<StatusCounts> {
+        self.with_conn(move |conn| {
+            let pages_latest = count_project(
+                conn,
+                "SELECT COUNT(*) FROM pages WHERE workspace_id = ?1 AND project_id = ?2 AND is_latest = 1",
+                workspace_id,
+                project_id,
+            )?;
+            let pages_all = count_project(
+                conn,
+                "SELECT COUNT(*) FROM pages WHERE workspace_id = ?1 AND project_id = ?2",
+                workspace_id,
+                project_id,
+            )?;
+            let sessions = count_project(
+                conn,
+                "SELECT COUNT(*) FROM sessions WHERE workspace_id = ?1 AND project_id = ?2",
+                workspace_id,
+                project_id,
+            )?;
+            let observations = count_project(
+                conn,
+                "SELECT COUNT(*) FROM observations WHERE workspace_id = ?1 AND project_id = ?2",
+                workspace_id,
+                project_id,
+            )?;
+            Ok(StatusCounts {
+                pages_latest,
+                pages_all,
+                sessions,
+                observations,
+            })
+        })
+        .await
+    }
+}
+
+fn page_meta_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoreResult<PageMeta>> {
+    let workspace_name: String = row.get(0)?;
+    let project_name: String = row.get(1)?;
+    let ws_id_bytes: Vec<u8> = row.get(2)?;
+    let proj_id_bytes: Vec<u8> = row.get(3)?;
+    let path: String = row.get(4)?;
+    let title: String = row.get(5)?;
+    let kind: String = row.get(6)?;
+    let tier: String = row.get(7)?;
+    let pinned: i64 = row.get(8)?;
+    let created_us: i64 = row.get(9)?;
+    let updated_us: i64 = row.get(10)?;
+    let supersedes: Option<String> = row.get(11)?;
+
+    let workspace_id = WorkspaceId::from_slice(&ws_id_bytes)
+        .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(2, 0))?;
+    let project_id = ProjectId::from_slice(&proj_id_bytes)
+        .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(3, 0))?;
+
+    let created_at = jiff::Timestamp::from_microsecond(created_us)
+        .map(|ts| ts.to_string())
+        .unwrap_or_default();
+    let updated_at = jiff::Timestamp::from_microsecond(updated_us)
+        .map(|ts| ts.to_string())
+        .unwrap_or_default();
+
+    Ok(Ok(PageMeta {
+        workspace_name,
+        project_name,
+        workspace_id,
+        project_id,
+        path,
+        title,
+        kind,
+        tier,
+        pinned: pinned != 0,
+        created_at,
+        updated_at,
+        supersedes,
+    }))
 }
 
 fn row_to_observation(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoreResult<Observation>> {
@@ -1426,6 +1756,22 @@ fn count(conn: &Connection, sql: &str) -> StoreResult<u64> {
     Ok(u64::try_from(n.unwrap_or(0)).unwrap_or(0))
 }
 
+fn count_project(
+    conn: &Connection,
+    sql: &str,
+    workspace_id: WorkspaceId,
+    project_id: ProjectId,
+) -> StoreResult<u64> {
+    let n: Option<i64> = conn
+        .query_row(
+            sql,
+            params![workspace_id.as_bytes(), project_id.as_bytes()],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(u64::try_from(n.unwrap_or(0)).unwrap_or(0))
+}
+
 /// Count rows in a time-bounded window. Used by [`ReaderPool::briefing`]
 /// to compute "last 7 days" / "last 30 days" activity slices.
 fn window_activity(conn: &Connection, days: u32, cutoff_us: i64) -> StoreResult<ActivityWindow> {
@@ -1443,6 +1789,37 @@ fn window_activity(conn: &Connection, days: u32, cutoff_us: i64) -> StoreResult<
         observations: count_since("SELECT COUNT(*) FROM observations WHERE created_at > ?1")?,
         pages_updated: count_since(
             "SELECT COUNT(*) FROM pages WHERE is_latest = 1 AND updated_at > ?1",
+        )?,
+    })
+}
+
+fn window_activity_project(
+    conn: &Connection,
+    days: u32,
+    cutoff_us: i64,
+    workspace_id: WorkspaceId,
+    project_id: ProjectId,
+) -> StoreResult<ActivityWindow> {
+    let count_since = |sql: &str| -> StoreResult<u64> {
+        let n: Option<i64> = conn
+            .query_row(
+                sql,
+                params![workspace_id.as_bytes(), project_id.as_bytes(), cutoff_us],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(u64::try_from(n.unwrap_or(0)).unwrap_or(0))
+    };
+    Ok(ActivityWindow {
+        days,
+        sessions: count_since(
+            "SELECT COUNT(*) FROM sessions WHERE workspace_id = ?1 AND project_id = ?2 AND started_at > ?3",
+        )?,
+        observations: count_since(
+            "SELECT COUNT(*) FROM observations WHERE workspace_id = ?1 AND project_id = ?2 AND created_at > ?3",
+        )?,
+        pages_updated: count_since(
+            "SELECT COUNT(*) FROM pages WHERE workspace_id = ?1 AND project_id = ?2 AND is_latest = 1 AND updated_at > ?3",
         )?,
     })
 }

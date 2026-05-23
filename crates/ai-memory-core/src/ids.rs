@@ -7,6 +7,7 @@
 //! `docs/issues-basic-memory.md`).
 
 use std::fmt;
+use std::path::Component;
 use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
@@ -93,8 +94,8 @@ id_newtype!(pub HandoffId, "Identifier for a cross-agent handoff record.");
 pub struct PagePath(String);
 
 impl PagePath {
-    /// Construct from a raw string. Rejects empty, leading-slash, and
-    /// dot-segment paths.
+    /// Construct from a raw string. Rejects empty, absolute, Windows-prefix,
+    /// backslash-separated, and dot-segment paths.
     ///
     /// # Errors
     /// Returns [`MemoryError::InvalidPagePath`] when the input is empty or
@@ -108,6 +109,26 @@ impl PagePath {
             return Err(MemoryError::InvalidPagePath(format!(
                 "leading slash: {raw}"
             )));
+        }
+        if raw.contains('\\') {
+            return Err(MemoryError::InvalidPagePath(format!(
+                "backslash separator in {raw}"
+            )));
+        }
+        for component in std::path::Path::new(&raw).components() {
+            match component {
+                Component::Normal(_) => {}
+                Component::CurDir | Component::ParentDir => {
+                    return Err(MemoryError::InvalidPagePath(format!(
+                        "dot segment in {raw}"
+                    )));
+                }
+                Component::Prefix(_) | Component::RootDir => {
+                    return Err(MemoryError::InvalidPagePath(format!(
+                        "absolute path in {raw}"
+                    )));
+                }
+            }
         }
         for segment in raw.split('/') {
             if segment.is_empty() || segment == "." || segment == ".." {
@@ -188,6 +209,12 @@ mod tests {
     fn page_path_rejects_dot_segments() {
         assert!(PagePath::new("a/./b").is_err());
         assert!(PagePath::new("a/../b").is_err());
+    }
+
+    #[test]
+    fn page_path_rejects_backslashes_and_windows_prefixes() {
+        assert!(PagePath::new(r"notes\secret.md").is_err());
+        assert!(PagePath::new(r"C:\Users\me\secret.md").is_err());
     }
 
     #[test]

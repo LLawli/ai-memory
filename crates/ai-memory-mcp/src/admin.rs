@@ -41,6 +41,7 @@ use axum::routing::{get, post};
 use flate2::Compression;
 use flate2::write::GzEncoder;
 use serde::{Deserialize, Serialize};
+use tokio_util::io::ReaderStream;
 use tracing::{info, warn};
 
 /// Shared state for the admin router.
@@ -137,18 +138,18 @@ pub fn admin_router(state: AdminState) -> Router {
 ///
 /// Snapshots the live SQLite DB via the online backup API, then
 /// tar-gzips `wiki/`, the snapshot, and `config.toml` (if present)
-/// into an in-memory buffer. The response body IS the tarball bytes —
-/// `Content-Type: application/gzip`, no JSON wrapper.
+/// into a tempfile. The response streams the file instead of buffering
+/// the full archive in memory.
 async fn handle_backup(State(state): State<Arc<AdminState>>) -> Response {
-    match build_backup_tarball(&state).await {
-        Ok(bytes) => Response::builder()
+    match build_backup_tarball_file(&state).await {
+        Ok(file) => Response::builder()
             .status(StatusCode::OK)
             .header(header::CONTENT_TYPE, "application/gzip")
             .header(
                 header::CONTENT_DISPOSITION,
                 "attachment; filename=\"backup.tar.gz\"",
             )
-            .body(Body::from(bytes))
+            .body(Body::from_stream(ReaderStream::new(file)))
             .unwrap_or_else(|_| {
                 Response::builder()
                     .status(StatusCode::INTERNAL_SERVER_ERROR)
@@ -173,7 +174,7 @@ async fn handle_backup(State(state): State<Arc<AdminState>>) -> Response {
     }
 }
 
-async fn build_backup_tarball(state: &AdminState) -> anyhow::Result<Vec<u8>> {
+async fn build_backup_tarball_file(state: &AdminState) -> anyhow::Result<tokio::fs::File> {
     let staging = tempfile::tempdir()?;
     let snapshot_path = staging.path().join("memory.sqlite");
     info!(snapshot = %snapshot_path.display(), "snapshotting SQLite for backup");
@@ -183,9 +184,10 @@ async fn build_backup_tarball(state: &AdminState) -> anyhow::Result<Vec<u8>> {
         .await
         .map_err(|e| anyhow::anyhow!("sqlite snapshot: {e}"))?;
 
-    let mut buf = Vec::new();
+    let mut tar_file = tempfile::NamedTempFile::new()?;
+    let tar_path = tar_file.path().to_path_buf();
     {
-        let encoder = GzEncoder::new(&mut buf, Compression::default());
+        let encoder = GzEncoder::new(tar_file.as_file_mut(), Compression::default());
         let mut tar = tar::Builder::new(encoder);
         tar.mode(tar::HeaderMode::Deterministic);
 
@@ -207,7 +209,11 @@ async fn build_backup_tarball(state: &AdminState) -> anyhow::Result<Vec<u8>> {
         let encoder = tar.into_inner()?;
         encoder.finish()?;
     }
-    Ok(buf)
+    tar_file.as_file_mut().sync_data()?;
+    let file = tokio::fs::File::open(&tar_path).await?;
+    drop(tar_file);
+    let _ = std::fs::remove_file(&tar_path);
+    Ok(file)
 }
 
 // ---------------------------------------------------------------------
@@ -262,6 +268,12 @@ async fn handle_status(State(state): State<Arc<AdminState>>) -> impl IntoRespons
 struct SearchQuery {
     /// FTS5 query expression.
     q: String,
+    /// Workspace name to search within. When omitted with `project`, admin search is global.
+    #[serde(default)]
+    workspace: Option<String>,
+    /// Project name to search within. When omitted with `workspace`, admin search is global.
+    #[serde(default)]
+    project: Option<String>,
     /// Max number of hits to return. Capped at 100 server-side.
     #[serde(default = "default_search_limit")]
     limit: usize,
@@ -276,7 +288,20 @@ async fn handle_search(
     Query(query): Query<SearchQuery>,
 ) -> impl IntoResponse {
     let limit = query.limit.clamp(1, 100);
-    match state.reader.search_pages(query.q, limit).await {
+    let search_result = match (query.workspace.as_deref(), query.project.as_deref()) {
+        (Some(workspace), Some(project)) => match resolve_ws_proj(&state, workspace, project).await
+        {
+            Ok((ws, proj)) => {
+                state
+                    .reader
+                    .search_pages_for_project(ws, proj, query.q, limit)
+                    .await
+            }
+            Err(e) => return e,
+        },
+        _ => state.reader.search_pages(query.q, limit).await,
+    };
+    match search_result {
         Ok(hits) => (
             StatusCode::OK,
             Json(serde_json::to_value(&hits).unwrap_or_else(|_| serde_json::json!([]))),

@@ -25,11 +25,17 @@ struct Hit {
 /// Returns an error if the server is unreachable or returns non-2xx.
 pub async fn run(_config: &Config, args: SearchArgs) -> Result<()> {
     let ep = ServerEndpoint::from_env();
+    let project = super::resolve_project_name(args.project.as_deref())?;
     let limit_str = args.limit.to_string();
     let hits: Vec<Hit> = get_json(
         &ep,
         "/admin/search",
-        &[("q", args.query.as_str()), ("limit", limit_str.as_str())],
+        &[
+            ("q", args.query.as_str()),
+            ("workspace", args.workspace.as_str()),
+            ("project", project.as_str()),
+            ("limit", limit_str.as_str()),
+        ],
     )
     .await?;
 

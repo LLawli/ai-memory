@@ -8,6 +8,7 @@ use axum::http::StatusCode;
 use axum::response::Html;
 use serde::Deserialize;
 
+use crate::markdown;
 use crate::state::WebState;
 use crate::templates::{SearchHit, SearchView};
 
@@ -46,13 +47,13 @@ pub(crate) async fn handler(
             // Get workspace + project by looking up full meta.
             // We try across all project/workspace combos by using the raw
             // search hit's path and calling a lightweight query.
-            if let Ok(Some(m)) = state.reader.page_meta_by_path(h.path.as_str()).await {
+            if let Ok(Some(m)) = state.reader.page_meta_by_id(h.id).await {
                 results.push(SearchHit {
                     workspace: m.workspace_name,
                     project: m.project_name,
                     path: h.path.as_str().to_owned(),
                     title: h.title,
-                    snippet: h.snippet,
+                    snippet: markdown::escape_snippet(&h.snippet),
                 });
             } else {
                 // Fallback: no workspace/project known; skip for now.

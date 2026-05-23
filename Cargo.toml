@@ -52,7 +52,7 @@ serde_yaml = "0.9"
 
 # Async runtime.
 tokio = { version = "1", features = ["full"] }
-tokio-util = { version = "0.7", features = ["rt"] }
+tokio-util = { version = "0.7", features = ["rt", "io"] }
 
 # Logging / tracing.
 tracing = "0.1"

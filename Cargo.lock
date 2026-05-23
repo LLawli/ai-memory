@@ -181,6 +181,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-util",
  "tower",
  "tracing",
 ]
@@ -219,6 +220,7 @@ dependencies = [
  "pulldown-cmark",
  "serde",
  "serde_json",
+ "sha2",
  "syntect",
  "tempfile",
  "thiserror 2.0.18",

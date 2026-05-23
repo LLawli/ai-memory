@@ -335,11 +335,20 @@ impl AiMemoryServer {
                         error = %e,
                         "embedder failed; degrading memory_query to BM25-only"
                     );
-                    self.reader.search_pages(args.query, limit).await
+                    self.reader
+                        .search_pages_for_project(
+                            self.workspace_id,
+                            self.project_id,
+                            args.query,
+                            limit,
+                        )
+                        .await
                 }
             }
         } else {
-            self.reader.search_pages(args.query, limit).await
+            self.reader
+                .search_pages_for_project(self.workspace_id, self.project_id, args.query, limit)
+                .await
         };
         let hits = hits.map_err(|e| McpError::internal_error(e.to_string(), None))?;
         self.spawn_access_bump(hits.iter().map(|h| h.id).collect());
@@ -361,7 +370,7 @@ impl AiMemoryServer {
         let limit = args.limit.unwrap_or(self.default_limit).clamp(1, 100);
         let hits = self
             .reader
-            .recent_pages(limit)
+            .recent_pages_for_project(self.workspace_id, self.project_id, limit)
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
         self.spawn_access_bump(hits.iter().map(|h| h.id).collect());
@@ -549,7 +558,7 @@ impl AiMemoryServer {
     async fn memory_status(&self) -> Result<CallToolResult, McpError> {
         let counts = self
             .reader
-            .status_counts()
+            .status_counts_for_project(self.workspace_id, self.project_id)
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
         let response = StatusResponse { counts };
@@ -572,7 +581,7 @@ impl AiMemoryServer {
         let limit = args.recent_pages_limit.unwrap_or(10);
         let snapshot = self
             .reader
-            .briefing(limit)
+            .briefing_for_project(self.workspace_id, self.project_id, limit)
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
         ok_json(&snapshot)
@@ -599,7 +608,7 @@ impl AiMemoryServer {
         let limit = args.recent_pages_limit.unwrap_or(10);
         let snapshot = self
             .reader
-            .briefing(limit)
+            .briefing_for_project(self.workspace_id, self.project_id, limit)
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
