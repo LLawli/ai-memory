@@ -86,7 +86,7 @@ pub async fn get_json<T: DeserializeOwned>(
     let resp = req
         .send()
         .await
-        .with_context(|| format!("GET {url} (is the server running at {}?)", endpoint.url))?;
+        .map_err(|e| augment_connect_error(e, endpoint, &url))?;
     let status = resp.status();
     if !status.is_success() {
         let body = resp.text().await.unwrap_or_default();
@@ -112,7 +112,7 @@ pub async fn post_json<B: Serialize, T: DeserializeOwned>(
     let resp = req
         .send()
         .await
-        .with_context(|| format!("POST {url} (is the server running at {}?)", endpoint.url))?;
+        .map_err(|e| augment_connect_error(e, endpoint, &url))?;
     let status = resp.status();
     if !status.is_success() {
         let body = resp.text().await.unwrap_or_default();
@@ -121,6 +121,60 @@ pub async fn post_json<B: Serialize, T: DeserializeOwned>(
     resp.json::<T>()
         .await
         .with_context(|| format!("parsing JSON body from POST {url}"))
+}
+
+/// Turn a low-level reqwest connect/timeout error into a friendlier
+/// message that surfaces the env-var configuration. The common case
+/// is "Connection refused" — typically because `AI_MEMORY_SERVER_URL`
+/// is unset and the CLI defaulted to loopback on a host that has no
+/// local server running.
+fn augment_connect_error(
+    err: reqwest::Error,
+    endpoint: &ServerEndpoint,
+    url: &str,
+) -> anyhow::Error {
+    // Walk the source chain to see if there's a Connection-refused
+    // io::Error buried somewhere. reqwest wraps its errors deeply.
+    let chain_contains_refused = {
+        let mut src: Option<&dyn std::error::Error> = Some(&err);
+        let mut found = false;
+        while let Some(e) = src {
+            if e.to_string().contains("Connection refused")
+                || e.to_string().contains("connection refused")
+            {
+                found = true;
+                break;
+            }
+            src = e.source();
+        }
+        found
+    };
+
+    let url_from_env = std::env::var("AI_MEMORY_SERVER_URL").is_ok_and(|v| !v.is_empty());
+
+    if chain_contains_refused {
+        let hint = if url_from_env {
+            format!(
+                "\nAI_MEMORY_SERVER_URL is set to {} but nothing answered. \
+                 Check the server is running, the port is reachable from \
+                 this host, and (if remote) any firewall + bearer-token \
+                 config matches.",
+                endpoint.url
+            )
+        } else {
+            format!(
+                "\nAI_MEMORY_SERVER_URL is NOT set; the CLI defaulted to \
+                 {} and nothing answered. If your server lives on another \
+                 machine (e.g. a homelab), `export AI_MEMORY_SERVER_URL=\
+                 http://<server>:49374` and (if auth is on) \
+                 `export AI_MEMORY_AUTH_TOKEN=<token>` before re-running.",
+                endpoint.url
+            )
+        };
+        anyhow::Error::new(err).context(format!("could not reach {url}.{hint}"))
+    } else {
+        anyhow::Error::new(err).context(format!("HTTP request to {url} failed"))
+    }
 }
 
 /// POST an empty body to `<endpoint>{path}`, return the raw response bytes.
@@ -139,7 +193,7 @@ pub async fn post_bytes(endpoint: &ServerEndpoint, path: &str) -> Result<Vec<u8>
     let resp = req
         .send()
         .await
-        .with_context(|| format!("POST {url} (is the server running at {}?)", endpoint.url))?;
+        .map_err(|e| augment_connect_error(e, endpoint, &url))?;
     let status = resp.status();
     if !status.is_success() {
         let body = resp.text().await.unwrap_or_default();

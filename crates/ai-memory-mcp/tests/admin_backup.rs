@@ -33,6 +33,7 @@ async fn make_state(tmp: &TempDir) -> (AdminState, Store) {
         data_dir: tmp.path().to_path_buf(),
         db_path,
         bind: "127.0.0.1:0".to_string(),
+        bootstrap_lock: std::sync::Arc::new(tokio::sync::Mutex::new(())),
     };
     (state, store)
 }

@@ -66,6 +66,13 @@ pub struct AdminState {
     pub db_path: PathBuf,
     /// Server's bind address — informational, surfaced in /admin/status.
     pub bind: String,
+    /// Serialises concurrent bootstrap requests. Bootstrap fans out
+    /// into an LLM call + a multi-page wiki write + a git commit;
+    /// running two in parallel would race the `commit_all` git ops and
+    /// stack LLM cost unnecessarily. The mutex is held for the entire
+    /// handler so a second caller waits its turn (request stays open
+    /// until the lock is acquired, then proceeds normally).
+    pub bootstrap_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 /// JSON request body for `POST /admin/bootstrap`.
@@ -368,14 +375,39 @@ async fn handle_bootstrap(
         ));
     }
 
-    // Resolve workspace + project — create if absent.
+    // Resolve workspace + project — create if absent. This is cheap;
+    // do it BEFORE acquiring the mutex so the get-or-create race is
+    // serialised by the writer actor (not gated on bootstrap-running).
     let (ws, proj) = resolve_ws_proj(&state, &req.workspace, &req.project).await?;
 
-    // Dry-run with no LLM: compute the budget-pruned source counts and
-    // return early without constructing Bootstrap (which requires an LLM).
+    // Dry-run is read-only (no LLM call, no git commit), so it can
+    // proceed in parallel with anything else.
     if req.dry_run && state.llm.is_none() {
         return dry_run_outcome(req.sources, req.max_input_tokens);
     }
+
+    // Serialise live bootstrap runs. Two parallel `process_sources`
+    // calls would race the wiki's `commit_all` (libgit2 ops on the
+    // same repo) and stack LLM cost unnecessarily. The wait is
+    // operator-visible only in log lines; the request stays open
+    // until the lock is acquired, then proceeds normally.
+    if !req.dry_run {
+        if let Ok(guard) = state.bootstrap_lock.try_lock() {
+            // Fast path: nobody else was bootstrapping, lock acquired
+            // immediately. Drop straight through.
+            drop(guard);
+        } else {
+            info!(
+                "another bootstrap is in progress; queueing — \
+                 this request waits for the active one to finish"
+            );
+        }
+    }
+    let _bootstrap_guard = if req.dry_run {
+        None
+    } else {
+        Some(state.bootstrap_lock.lock().await)
+    };
 
     let llm = Arc::clone(
         state
