@@ -169,6 +169,7 @@ fi
 
 ENV_ARGS=()
 for var in \
+  AI_MEMORY_SERVER_URL \
   AI_MEMORY_AUTH_TOKEN \
   AI_MEMORY_LLM_PROVIDER \
   AI_MEMORY_LLM_MODEL \
@@ -204,18 +205,19 @@ fi
 #   - dirs::home_dir() resolves identically (~/.claude/settings.json
 #     auto-detect works without --config-file)
 #   - install-hooks stages scripts into ~/.local/share/ai-memory/hooks/
-# Mount $PWD when it's outside $HOME (so install-instructions
-# --target ./CLAUDE.md and bootstrap with $PWD as repo-root work).
-PWD_ARGS=()
-case "${PWD}" in
-  "${HOME}"|"${HOME}"/*) : ;;  # already covered by the $HOME mount
-  *) PWD_ARGS=(-v "${PWD}:${PWD}") ;;
-esac
-
+#
+# Mount $PWD at /work and set the container workdir there. This
+# matters for bootstrap, which needs to find a `.git` at the CWD.
+# We *don't* use `-w "$PWD"` because rootless docker / runc errors
+# with "mkdir <path>: file exists" when the workdir sits beneath
+# an already-bind-mounted parent (the host's $HOME mount). The
+# /work path is fresh inside the container so the bind mount
+# resolves cleanly. Commands that don't care about the repo CWD
+# (install-mcp, install-hooks, status, search, …) just ignore it.
 exec "${DOCKER}" run --rm "${TTY_ARGS[@]}" \
   -v "${HOME}:${HOME}" \
-  "${PWD_ARGS[@]}" \
-  -w "${PWD}" \
+  -v "${PWD}:/work" \
+  -w /work \
   -e HOME="${HOME}" \
   -u "$(id -u):$(id -g)" \
   "${DATA_ARGS[@]}" \
