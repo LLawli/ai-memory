@@ -235,23 +235,26 @@ scales automatically to how long it's been since the last activity
 ### When you write a project rule, write it here
 
 If you're about to write a durable project rule ("always X", "never
-Y", "all PRs must …"), this file (CLAUDE.md / AGENTS.md) is where
-the rule belongs. ai-memory's lint pass surfaces the same hint
-automatically when a `kind: rule` page lands in `_rules/`.
+Y", "all PRs must …"), this rules file (CLAUDE.md for Claude Code;
+AGENTS.md for Codex / OpenCode / Cursor / Gemini CLI; whichever
+convention your agent uses) is where it belongs. ai-memory's lint
+pass surfaces the same hint automatically when a `kind: rule` page
+lands in `_rules/`.
 
 ### Refreshing this snippet
 
-This block is maintained by ai-memory. To re-sync it with the
-latest binary's recommended copy (e.g. when new tools ship), run:
+This block is maintained by ai-memory. Two ways to refresh it with
+the latest binary's recommended copy:
 
-```
-ai-memory install-instructions
-```
+- **From the agent** (no terminal needed): ask "refresh the ai-memory
+  routing in this project" — the agent calls
+  `memory_install_self_routing`, picks the right filename for itself
+  (Claude Code → `CLAUDE.md`; Codex / OpenCode / Cursor / Gemini →
+  `AGENTS.md`), and uses its Write / Edit tool to land the block.
+- **From the CLI**: `ai-memory install-instructions` (defaults to
+  `CLAUDE.md`; pass `--target AGENTS.md` for non-Claude agents).
 
-It's idempotent: re-runs replace the block bracketed by
+Both are idempotent: re-runs replace the block bracketed by
 `<!-- ai-memory:start -->` / `<!-- ai-memory:end -->` markers
-without disturbing the rest of the file.
-<!-- ai-memory:end -->
-` markers
 without disturbing the rest of the file.
 <!-- ai-memory:end -->
