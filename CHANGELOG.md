@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-05-24
+
 ### Added
 - Wiki-structure migration framework: `wiki_migrations` SQL table (V06),
   `WikiMigration` trait, migration registry, and `run_pending` runner
@@ -79,5 +81,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Consolidator used server startup default project instead of the
   session's actual project.
 
-[Unreleased]: https://github.com/akitaonrails/ai-memory/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/akitaonrails/ai-memory/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/akitaonrails/ai-memory/releases/tag/v0.1.1
 [0.1.0]: https://github.com/akitaonrails/ai-memory/releases/tag/v0.1.0
