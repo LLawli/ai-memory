@@ -229,7 +229,7 @@ The rendered snippet writes to `mcp_config.json` under `mcpServers`:
 }
 ```
 
-**Config file (hooks):** `~/.gemini/antigravity-cli/hooks.json`
+**Config file (hooks):** `~/.gemini/config/hooks.json`
 
 Antigravity CLI uses a named-groups hook format. Each top-level key
 is a hook group name; inside, event arrays map to handlers. Tool
@@ -277,7 +277,7 @@ The rendered hooks config looks like:
     "Stop": [
       {
         "type": "command",
-        "command": "AI_MEMORY_HOOK_URL=http://127.0.0.1:49374 /path/to/session-end.sh"
+        "command": "AI_MEMORY_HOOK_URL=http://127.0.0.1:49374 /path/to/stop.sh"
       }
     ]
   }
@@ -289,8 +289,12 @@ The rendered hooks config looks like:
   or `httpUrl`. The `--apply` flag writes the correct key.
 - Hook scripts are staged under `~/.local/share/ai-memory/hooks/antigravity-cli/`.
 - The `PreInvocation` event fires before each model call (not just at
-  session start). This is the closest equivalent to Gemini CLI's
-  `SessionStart`.
+  session start). ai-memory uses it as the closest equivalent to Gemini
+  CLI's `SessionStart`; when a pending handoff exists, the hook injects
+  it via Antigravity's `injectSteps[].ephemeralMessage` output.
+- Antigravity CLI does not expose a true session-end hook. `Stop` records
+  a stop observation only; call `memory_handoff_begin` before quitting when
+  you need the next agent to receive a handoff.
 - Source: <https://antigravity.google/docs/hooks>
 
 ---
@@ -429,7 +433,7 @@ that *starts* the next one - to play nicely with ai-memory:
 
 | Side | What's needed | Covered by |
 |---|---|---|
-| **Ending side** | The agent must create a handoff, either through a true session-end hook or by calling `memory_handoff_begin`. | Built-in for Claude Code, Codex, Cursor, Gemini CLI, Antigravity CLI, OpenClaw, and OMP. OpenCode has no true session-end event, so ask it to call `memory_handoff_begin` before quitting when you need a handoff. |
+| **Ending side** | The agent must create a handoff, either through a true session-end hook or by calling `memory_handoff_begin`. | Built-in for Claude Code, Codex, Cursor, Gemini CLI, OpenClaw, and OMP. OpenCode and Antigravity CLI have no true session-end event, so ask them to call `memory_handoff_begin` before quitting when you need a handoff. |
 | **Starting side** | Either (a) the session-start/plugin path injects the handoff via `/handoff`, OR (b) the model proactively calls `memory_handoff_accept` on first turn. | (a) is built-in for Claude Code / Codex / Cursor / Gemini CLI / Antigravity CLI / OpenClaw / OpenCode / OMP. (b) works for any MCP-capable client if you nudge the model - see [the routing snippet](usage.md#install-the-routing-snippet). |
 
 So a typical mixed workflow looks like:

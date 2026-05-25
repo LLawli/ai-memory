@@ -308,5 +308,8 @@ mod tests {
             serde_json::from_str::<AgentKind>("\"open-claw\"").unwrap(),
             AgentKind::OpenClaw
         );
+
+        let antigravity = serde_json::to_string(&AgentKind::AntigravityCli).unwrap();
+        assert_eq!(antigravity, "\"antigravity-cli\"");
     }
 }

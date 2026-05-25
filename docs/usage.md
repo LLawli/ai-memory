@@ -61,7 +61,8 @@ Install ai-memory routing into this project.
 
 The agent calls `memory_install_self_routing`, receives the canonical
 snippet, and writes it to the right rules file (`CLAUDE.md` for Claude
-Code, `AGENTS.md` for Codex / OpenCode / Cursor / Gemini CLI). The
+Code, `AGENTS.md` for Codex / OpenCode / Cursor / Gemini CLI /
+Antigravity CLI). The
 block is wrapped in `<!-- ai-memory:start -->` and
 `<!-- ai-memory:end -->`, so re-runs replace it in place.
 

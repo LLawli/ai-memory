@@ -3,7 +3,7 @@
 #
 #   sh tests/hooks/test_lib.sh
 #
-# Exits non-zero on any failure. POSIX shell + sed only, so no extra
+# Exits non-zero on any failure. POSIX shell + sed/awk only, so no extra
 # CI setup needed.
 set -eu
 
@@ -58,6 +58,14 @@ assert_eq "extract cwd from payload"     "/home/u/foo" "$(ai_memory_extract_cwd 
 assert_eq "extract cwd from empty json"  ""            "$(ai_memory_extract_cwd '{}')"
 PAYLOAD_NESTED='{"session_id":"x","cwd":"/home/u/root","tool_input":{"cwd":"/tmp/nested"}}'
 assert_eq "extract cwd prefers first match" "/home/u/root" "$(ai_memory_extract_cwd "$PAYLOAD_NESTED")"
+PAYLOAD_AGY='{"conversationId":"x","workspacePaths":["/home/u/agy","/tmp/other"]}'
+assert_eq "extract cwd from antigravity workspacePaths" "/home/u/agy" "$(ai_memory_extract_cwd "$PAYLOAD_AGY")"
+
+# --- json_string -------------------------------------------------------
+JSON_INPUT='quoted "thing" \ path
+next line'
+assert_eq "json_string escapes text" '"quoted \"thing\" \\ path\nnext line"' \
+    "$(printf '%s' "$JSON_INPUT" | ai_memory_json_string)"
 
 # --- marker_qs --------------------------------------------------------
 QS=$(ai_memory_marker_qs "$TMP/a/b/c")

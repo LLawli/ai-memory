@@ -209,10 +209,8 @@ pub(crate) const ANTIGRAVITY_TOOL_EVENTS: [(&str, &str); 2] = [
     ("PostToolUse", "post-tool-use.sh"),
 ];
 
-pub(crate) const ANTIGRAVITY_LIFECYCLE_EVENTS: [(&str, &str); 2] = [
-    ("PreInvocation", "session-start.sh"),
-    ("Stop", "session-end.sh"),
-];
+pub(crate) const ANTIGRAVITY_LIFECYCLE_EVENTS: [(&str, &str); 2] =
+    [("PreInvocation", "session-start.sh"), ("Stop", "stop.sh")];
 
 /// Build the Antigravity CLI (`agy`) `hooks.json` payload.
 ///
@@ -768,6 +766,19 @@ mod tests {
         // Auth token inlined into commands
         let cmd = handler.get("command").and_then(|c| c.as_str()).unwrap();
         assert!(cmd.contains("AI_MEMORY_AUTH_TOKEN=tok"));
+
+        let stop = group
+            .get("Stop")
+            .and_then(|e| e.as_array())
+            .expect("missing Stop");
+        let stop_cmd = stop[0]
+            .get("command")
+            .and_then(|c| c.as_str())
+            .expect("Stop command missing");
+        assert!(
+            stop_cmd.contains("stop.sh"),
+            "Stop must record a stop observation, not synthesize session-end handoffs: {stop_cmd}"
+        );
 
         // All expected events present
         for expected in ["PreToolUse", "PostToolUse", "PreInvocation", "Stop"] {

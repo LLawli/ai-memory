@@ -7,8 +7,8 @@
 ## Purpose
 
 ai-memory is a single Rust binary that gives AI coding agents (Claude
-Code, OpenAI Codex, Cursor, Gemini CLI, OpenClaw, OpenCode, OMP, and
-MCP-capable clients) long-term memory shared across CLIs.
+Code, OpenAI Codex, Cursor, Gemini CLI, Antigravity CLI, OpenClaw,
+OpenCode, OMP, and MCP-capable clients) long-term memory shared across CLIs.
 Quit one mid-task; open another in the same directory; continue. No
 manual `write_note` ceremony, no copy-pasting summaries between
 sessions.
@@ -26,6 +26,7 @@ markdown stays the source of truth.
                 ┌──────────────────────┐
                 │ Claude Code / Codex  │
                 │ Cursor / Gemini CLI  │
+                │ Antigravity CLI      │
                 │ OpenClaw / OpenCode  │
                 │ OMP                  │
                 └──────────┬───────────┘
@@ -82,9 +83,12 @@ markdown stays the source of truth.
    untrusted text into the store), assigns an [`ObservationKind`], and
    enqueues a `WriteCmd` to the writer actor. `log.md` gets an
    appended `## [YYYY-MM-DDTHH:MM:SSZ] <event> | <title>` line.
-3. On `SessionEnd`, the server synthesises a `sessions/<id>.md`
-   summary page (rule-based, no LLM) and opens a `Handoff` row for the
-   next agent. Auto-commits the wiki.
+3. On true `SessionEnd` events, the server synthesises a
+   `sessions/<id>.md` summary page (rule-based, no LLM) and opens a
+   `Handoff` row for the next agent. Auto-commits the wiki. Clients
+   without a true session-end hook (currently OpenCode and Antigravity
+   CLI) should call `memory_handoff_begin` before quitting when a
+   handoff is needed.
 4. When `AI_MEMORY_LLM_PROVIDER` is set, `memory_consolidate` rewrites
    that summary into a richer durable page or fans out into a
    multi-page batch under `concepts/`, `decisions/`, `gotchas/`.

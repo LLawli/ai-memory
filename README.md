@@ -30,7 +30,7 @@
 | Oh My Pi / OMP | Supported | `pi` / `omp` aliases for MCP config + TypeScript extension. |
 | Claude Desktop | MCP-only | Uses `mcp-remote`; no lifecycle hooks. |
 | OpenClaw | Supported | MCP config + native plugin lifecycle hooks. |
-| Antigravity CLI | Supported | MCP config (`serverUrl`) + lifecycle hooks. |
+| Antigravity CLI | Supported | MCP config (`serverUrl`) + lifecycle hooks (`agy` alias). |
 | LLM providers | Supported | Anthropic, OpenAI, Gemini, and OpenAI-compatible endpoints. |
 | Embedding providers | Supported | OpenAI, Voyage, and Google Gemini. |
 
@@ -73,7 +73,8 @@ priors are at the [bottom](#influences-and-prior-art).
   mode. Mounted on the same axum server as MCP.
 - **Multi-agent + multi-machine ready.** Supported clients: Claude
   Code, Codex, OpenCode, Cursor, Claude Desktop (via `mcp-remote`),
-  Gemini CLI, Antigravity CLI, OpenClaw, and Oh My Pi / OMP (`pi` / `omp` aliases).
+  Gemini CLI, Antigravity CLI, OpenClaw, and Oh My Pi / OMP
+  (`pi` / `omp` aliases).
   Server runs local (loopback) OR on a homelab box (LAN/VPN/cloud)
   with bearer-token auth.
 - **Thin-client CLI.** `ai-memory bootstrap`, `purge-project`,

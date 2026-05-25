@@ -241,6 +241,14 @@ docker run --rm akitaonrails/ai-memory:latest \
     --server-url "http://homelab:49374"
 
 docker run --rm akitaonrails/ai-memory:latest \
+    install-mcp --client antigravity-cli --auth-token "$TOKEN" \
+    --server-url "http://homelab:49374/mcp"
+
+docker run --rm akitaonrails/ai-memory:latest \
+    install-hooks --agent antigravity-cli --auth-token "$TOKEN" \
+    --server-url "http://homelab:49374"
+
+docker run --rm akitaonrails/ai-memory:latest \
     install-mcp --client openclaw        --auth-token "$TOKEN" \
     --server-url "http://homelab:49374/mcp"
 
@@ -253,7 +261,8 @@ Cursor, Gemini CLI, Antigravity CLI, and OpenClaw support both `install-mcp` and
 `install-hooks`. Claude Desktop is MCP-only here, so you'll need to
 nudge the model to call `memory_query` / `memory_handoff_accept` itself.
 For clients with `install-hooks` support, the capture path handles
-handoff injection at session start.
+handoff injection at session start or the client's closest equivalent
+(Antigravity CLI uses `PreInvocation`).
 
 ---
 

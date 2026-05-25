@@ -403,7 +403,7 @@ fn merge_gemini_hooks(
     })
 }
 
-/// Mutate `~/.gemini/antigravity-cli/hooks.json` so Antigravity CLI (`agy`)
+/// Mutate `~/.gemini/config/hooks.json` so Antigravity CLI (`agy`)
 /// fires the ai-memory scripts on its lifecycle events.
 ///
 /// Antigravity CLI uses a named-groups format where hook groups are
@@ -411,7 +411,7 @@ fn merge_gemini_hooks(
 /// events (`PreToolUse`, `PostToolUse`) use nested shape with matcher;
 /// lifecycle events (`PreInvocation`, `Stop`) use flat shape.
 ///
-/// Config file: `~/.gemini/antigravity-cli/hooks.json`
+/// Config file: `~/.gemini/config/hooks.json`
 fn apply_to_antigravity_settings(
     hooks_dir: &Path,
     server_url: &str,
@@ -421,9 +421,9 @@ fn apply_to_antigravity_settings(
     let path = match &args.config_file {
         Some(p) => p.clone(),
         None => dirs::home_dir()
-            .context("could not locate $HOME for ~/.gemini/antigravity-cli/hooks.json")?
+            .context("could not locate $HOME for ~/.gemini/config/hooks.json")?
             .join(".gemini")
-            .join("antigravity-cli")
+            .join("config")
             .join("hooks.json"),
     };
     let staged = stage_hook_scripts(hooks_dir, "antigravity-cli")?;
@@ -1907,9 +1907,9 @@ mod tests {
             hooks_tmp.path(),
             &[
                 "session-start.sh",
-                "session-end.sh",
                 "pre-tool-use.sh",
                 "post-tool-use.sh",
+                "stop.sh",
             ],
         );
 
@@ -1963,9 +1963,9 @@ mod tests {
             hooks_tmp.path(),
             &[
                 "session-start.sh",
-                "session-end.sh",
                 "pre-tool-use.sh",
                 "post-tool-use.sh",
+                "stop.sh",
             ],
         );
 

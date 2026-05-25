@@ -3,6 +3,8 @@ function Get-AiMemoryCwd {
     if (-not $Payload) { return $null }
     $match = [regex]::Match($Payload, '"cwd"\s*:\s*"([^"]*)"')
     if ($match.Success) { return $match.Groups[1].Value }
+    $workspaceMatch = [regex]::Match($Payload, '"workspacePaths"\s*:\s*\[\s*"([^"]*)"')
+    if ($workspaceMatch.Success) { return $workspaceMatch.Groups[1].Value }
     return $null
 }
 
@@ -48,7 +50,8 @@ function Invoke-AiMemoryHook {
     param(
         [Parameter(Mandatory = $true)] [string] $Event,
         [Parameter(Mandatory = $true)] [string] $Agent,
-        [switch] $FetchHandoff
+        [switch] $FetchHandoff,
+        [switch] $AntigravityPreInvocationOutput
     )
 
     $Server = if ($env:AI_MEMORY_HOOK_URL) { $env:AI_MEMORY_HOOK_URL } else { "http://127.0.0.1:49374" }
@@ -80,10 +83,24 @@ function Invoke-AiMemoryHook {
                 -TimeoutSec 1 `
                 -Uri "$Server/handoff?agent=$Agent$QS" `
                 -Headers $Headers
-            if ($null -ne $Response -and $null -ne $Response.Content) {
-                [Console]::Out.Write($Response.Content)
+            if ($null -ne $Response -and $Response.Content) {
+                if ($AntigravityPreInvocationOutput) {
+                    $Payload = @{
+                        injectSteps = @(@{ ephemeralMessage = $Response.Content })
+                    }
+                    [Console]::Out.Write(($Payload | ConvertTo-Json -Depth 5 -Compress))
+                } else {
+                    [Console]::Out.Write($Response.Content)
+                }
+            } elseif ($AntigravityPreInvocationOutput) {
+                [Console]::Out.Write("{}")
             }
         } catch {
+            if ($AntigravityPreInvocationOutput) {
+                [Console]::Out.Write("{}")
+            }
         }
+    } elseif ($AntigravityPreInvocationOutput) {
+        [Console]::Out.Write("{}")
     }
 }

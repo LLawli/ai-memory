@@ -366,7 +366,8 @@ pub enum AgentChoice {
     /// session/tool/compaction hooks.
     Openclaw,
     /// Google Antigravity CLI (`agy`) — JSON-config hooks in
-    /// `~/.gemini/antigravity-cli/hooks.json`.
+    /// `~/.gemini/config/hooks.json`.
+    #[value(alias = "antigravity", alias = "agy")]
     AntigravityCli,
 }
 
@@ -399,6 +400,7 @@ pub enum McpClient {
     #[value(alias = "omp", alias = "oh-my-pi")]
     Pi,
     /// Google Antigravity CLI (`agy`) — `~/.gemini/antigravity-cli/mcp_config.json`.
+    #[value(alias = "antigravity", alias = "agy")]
     AntigravityCli,
 }
 
@@ -686,6 +688,39 @@ mod tests {
                 matches!(args.agent, AgentChoice::Omp),
                 "alias {alias} must resolve to the OMP hook agent"
             );
+        }
+    }
+
+    #[test]
+    fn antigravity_aliases_parse_to_same_variant() {
+        for alias in ["antigravity-cli", "antigravity", "agy"] {
+            let mcp_cli = Cli::try_parse_from([
+                "ai-memory",
+                "install-mcp",
+                "--client",
+                alias,
+                "--server-url",
+                "http://example.test:49374/mcp",
+            ])
+            .unwrap_or_else(|e| panic!("failed to parse install-mcp alias {alias}: {e}"));
+            let Command::InstallMcp(mcp_args) = mcp_cli.command else {
+                panic!("expected install-mcp command for alias {alias}");
+            };
+            assert!(matches!(mcp_args.client, McpClient::AntigravityCli));
+
+            let hook_cli = Cli::try_parse_from([
+                "ai-memory",
+                "install-hooks",
+                "--agent",
+                alias,
+                "--server-url",
+                "http://example.test:49374",
+            ])
+            .unwrap_or_else(|e| panic!("failed to parse install-hooks alias {alias}: {e}"));
+            let Command::InstallHooks(hook_args) = hook_cli.command else {
+                panic!("expected install-hooks command for alias {alias}");
+            };
+            assert!(matches!(hook_args.agent, AgentChoice::AntigravityCli));
         }
     }
 }

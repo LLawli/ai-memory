@@ -45,6 +45,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Google Gemini embeddings via `AI_MEMORY_EMBEDDING_PROVIDER=google` or
   `gemini`, with `gemini-embedding-001` as the default embedding model and
   `GEMINI_API_KEY` / `GOOGLE_API_KEY` support.
+- Antigravity CLI (`agy`) support for MCP config (`serverUrl`) and lifecycle
+  capture through its `PreInvocation`, `PreToolUse`, `PostToolUse`, and `Stop`
+  hook events.
 - README support matrix for operating systems, agent integrations, LLM
   providers, and embedding providers.
 

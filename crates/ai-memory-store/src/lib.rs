@@ -176,7 +176,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn v09_session_agent_kind_migration_preserves_observations() {
+    async fn session_agent_kind_migrations_preserve_observations() {
         let tmp = TempDir::new().unwrap();
         let db_dir = tmp.path().join("db");
         std::fs::create_dir_all(&db_dir).unwrap();
@@ -225,7 +225,7 @@ mod tests {
                 id: SessionId::new(),
                 workspace_id: ws,
                 project_id: proj,
-                agent_kind: AgentKind::Cursor,
+                agent_kind: AgentKind::AntigravityCli,
                 cwd: None,
             })
             .await

@@ -1053,6 +1053,7 @@ mod tests {
             AgentKind::GeminiCli,
             AgentKind::ClaudeDesktop,
             AgentKind::OpenClaw,
+            AgentKind::AntigravityCli,
             AgentKind::Omp,
             AgentKind::Other,
         ] {

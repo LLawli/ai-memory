@@ -149,26 +149,36 @@ impl HookEnvelope {
         let agent = query.agent.as_deref().map_or(AgentKind::Other, parse_agent);
         // OpenCode's plugin SDK sends `sessionID` (capital `ID`) on the
         // tool.execute.*/session.* events; Claude Code uses `session_id`,
-        // Codex `sessionId`. JSON keys are case-sensitive, so all three
-        // spellings must be listed or OpenCode tool events fail the
-        // "missing session_id" check in the router (issue #1).
-        let session_id = extract_string(&raw, &["session_id", "sessionId", "sessionID", "session"])
-            .or_else(|| {
-                extract_string_path(
-                    &raw,
-                    &[
-                        &["info", "id"],
-                        &["properties", "sessionID"],
-                        &["properties", "info", "id"],
-                        &["event", "properties", "sessionID"],
-                        &["event", "properties", "info", "id"],
-                        &["payload", "info", "id"],
-                        &["payload", "properties", "sessionID"],
-                        &["payload", "properties", "info", "id"],
-                    ],
-                )
-            });
+        // Codex `sessionId`, and Antigravity CLI uses `conversationId`.
+        // JSON keys are case-sensitive, so all spellings must be listed
+        // or tool events fail the router's "missing session_id" check.
+        let session_id = extract_string(
+            &raw,
+            &[
+                "session_id",
+                "sessionId",
+                "sessionID",
+                "session",
+                "conversationId",
+            ],
+        )
+        .or_else(|| {
+            extract_string_path(
+                &raw,
+                &[
+                    &["info", "id"],
+                    &["properties", "sessionID"],
+                    &["properties", "info", "id"],
+                    &["event", "properties", "sessionID"],
+                    &["event", "properties", "info", "id"],
+                    &["payload", "info", "id"],
+                    &["payload", "properties", "sessionID"],
+                    &["payload", "properties", "info", "id"],
+                ],
+            )
+        });
         let body_cwd = extract_string(&raw, &["cwd", "current_dir", "working_dir", "directory"])
+            .or_else(|| extract_first_string_array_item(&raw, &["workspacePaths"]))
             .or_else(|| {
                 extract_string_path(
                     &raw,
@@ -252,6 +262,44 @@ fn extract_string_path(value: &serde_json::Value, paths: &[&[&str]]) -> Option<S
     None
 }
 
+fn extract_scalar_string(value: &serde_json::Value, keys: &[&str]) -> Option<String> {
+    for key in keys {
+        for candidate in extraction_candidates(value) {
+            if let Some(value) = candidate.get(*key) {
+                if let Some(s) = value.as_str()
+                    && !s.is_empty()
+                {
+                    return Some(s.to_string());
+                }
+                if let Some(n) = value.as_i64() {
+                    return Some(n.to_string());
+                }
+                if let Some(n) = value.as_u64() {
+                    return Some(n.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+fn extract_first_string_array_item(value: &serde_json::Value, keys: &[&str]) -> Option<String> {
+    for key in keys {
+        for candidate in extraction_candidates(value) {
+            if let Some(items) = candidate.get(*key).and_then(serde_json::Value::as_array) {
+                for item in items {
+                    if let Some(s) = item.as_str()
+                        && !s.is_empty()
+                    {
+                        return Some(s.to_string());
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
 fn value_at_path<'a>(
     mut value: &'a serde_json::Value,
     path: &[&str],
@@ -298,6 +346,10 @@ fn best_title_hint(event: HookEvent, raw: &serde_json::Value) -> Option<String> 
         }
         HookEvent::PreToolUse | HookEvent::PostToolUse => {
             extract_string(raw, &["tool", "tool_name", "name"])
+                .or_else(|| extract_string_path(raw, &[&["toolCall", "name"]]))
+                .or_else(|| {
+                    extract_scalar_string(raw, &["stepIdx"]).map(|step| format!("step {step}"))
+                })
         }
         HookEvent::Notification => extract_string(raw, &["message", "text"]),
         _ => None,
@@ -329,8 +381,13 @@ fn best_body_excerpt(event: HookEvent, raw: &serde_json::Value) -> Option<String
     match event {
         HookEvent::UserPrompt => extract_string(raw, &["prompt", "message", "text"]),
         HookEvent::PostToolUse => {
-            let tool = extract_string(raw, &["tool", "tool_name", "name"])?;
+            let tool = extract_string(raw, &["tool", "tool_name", "name"])
+                .or_else(|| extract_string_path(raw, &[&["toolCall", "name"]]))
+                .or_else(|| {
+                    extract_scalar_string(raw, &["stepIdx"]).map(|step| format!("step {step}"))
+                })?;
             let result = extract_string(raw, &["tool_response", "tool_output", "output", "result"])
+                .or_else(|| extract_string(raw, &["error"]))
                 .unwrap_or_else(|| "(no output captured)".into());
             Some(format!("tool: {tool}\n---\n{}", truncate_excerpt(&result)))
         }
@@ -494,6 +551,59 @@ mod tests {
         assert_eq!(env.title_hint.as_deref(), Some("claude-sonnet-4-6"));
     }
 
+    /// Antigravity CLI identifies the conversation as `conversationId`
+    /// and reports cwd-like routing through `workspacePaths`.
+    #[test]
+    fn envelope_extracts_antigravity_conversation_and_workspace_path() {
+        let q = HookQuery {
+            event: "PreToolUse".into(),
+            agent: Some("agy".into()),
+            ..Default::default()
+        };
+        let raw = serde_json::json!({
+            "conversationId": "ec33ebf9-0cba-4100-8142-c61503f6c587",
+            "workspacePaths": ["/workspace/project", "/workspace/other"],
+            "toolCall": {
+                "name": "run_command",
+                "args": {"CommandLine": "cargo test"}
+            },
+            "stepIdx": 3
+        });
+        let env = HookEnvelope::from_query_and_body(q, raw);
+
+        assert_eq!(env.agent, AgentKind::AntigravityCli);
+        assert_eq!(env.event, HookEvent::PreToolUse);
+        assert_eq!(
+            env.session_id.as_deref(),
+            Some("ec33ebf9-0cba-4100-8142-c61503f6c587")
+        );
+        assert_eq!(env.cwd.as_deref(), Some("/workspace/project"));
+        assert_eq!(env.title_hint.as_deref(), Some("run_command"));
+    }
+
+    #[test]
+    fn envelope_uses_antigravity_step_idx_for_post_tool_title_fallback() {
+        let q = HookQuery {
+            event: "PostToolUse".into(),
+            agent: Some("antigravity-cli".into()),
+            ..Default::default()
+        };
+        let raw = serde_json::json!({
+            "conversationId": "agy-conv",
+            "workspacePaths": ["/workspace/project"],
+            "stepIdx": 5,
+            "error": "exit status 1"
+        });
+        let env = HookEnvelope::from_query_and_body(q, raw);
+
+        assert_eq!(env.title_hint.as_deref(), Some("step 5"));
+        assert!(
+            env.body_excerpt
+                .as_deref()
+                .is_some_and(|body| body.contains("exit status 1"))
+        );
+    }
+
     /// OpenCode's plugin SDK sends `sessionID` (capital `ID`) on the
     /// tool.execute.* / session.* events. Regression for issue #1: this
     /// spelling must be extracted, otherwise non-session-start events
@@ -594,6 +704,9 @@ mod tests {
         assert_eq!(parse_agent("gemini"), AgentKind::GeminiCli);
         assert_eq!(parse_agent("claude-desktop"), AgentKind::ClaudeDesktop);
         assert_eq!(parse_agent("openclaw"), AgentKind::OpenClaw);
+        assert_eq!(parse_agent("antigravity-cli"), AgentKind::AntigravityCli);
+        assert_eq!(parse_agent("antigravity"), AgentKind::AntigravityCli);
+        assert_eq!(parse_agent("agy"), AgentKind::AntigravityCli);
         assert_eq!(parse_agent("omp"), AgentKind::Omp);
         assert_eq!(parse_agent("pi"), AgentKind::Omp);
         assert_eq!(parse_agent("oh-my-pi"), AgentKind::Omp);

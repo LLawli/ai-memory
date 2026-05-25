@@ -1,6 +1,6 @@
 # ai-memory hook helper — find marker file + parse minimal TOML.
 # Sourced by per-agent lifecycle hook scripts. POSIX shell only —
-# no bash-isms, no external deps (no jq, no toml crate). Keep changes
+# no bash-isms, no non-standard deps (no jq, no toml crate). Keep changes
 # byte-trivial because every supported agent (claude-code, codex,
 # cursor, gemini-cli, antigravity-cli, opencode, omp) sources this same file.
 
@@ -36,16 +36,24 @@ ai_memory_parse_toml_key() {
         "$file" | head -n 1
 }
 
-# Extract the first `cwd` from a JSON payload on stdin or in $1. Returns
-# the value or nothing. This is intentionally a tiny shell fallback, not
-# a JSON parser; taking the first match preserves the top-level cwd when
-# tool payloads contain nested `cwd` fields later in the object.
+# Extract the first cwd-like path from a JSON payload on stdin or in $1.
+# Returns the value or nothing. This is intentionally a tiny shell fallback,
+# not a JSON parser; taking the first match preserves the top-level cwd when
+# tool payloads contain nested `cwd` fields later in the object. Antigravity
+# CLI sends `workspacePaths: ["/repo", ...]` instead of `cwd`.
 ai_memory_extract_cwd() {
     payload="${1:-$(cat)}"
     rest=${payload#*\"cwd\"}
+    if [ "$rest" != "$payload" ]; then
+        printf '%s' "$rest" \
+            | sed -n -E 's/^[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/p' \
+            | head -n 1
+        return 0
+    fi
+    rest=${payload#*\"workspacePaths\"}
     [ "$rest" = "$payload" ] && return 0
     printf '%s' "$rest" \
-        | sed -n -E 's/^[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/p' \
+        | sed -n -E 's/^[[:space:]]*:[[:space:]]*\[[[:space:]]*"([^"]*)".*/\1/p' \
         | head -n 1
 }
 
@@ -105,4 +113,20 @@ ai_memory_get_handoff() {
     else
         curl -s --max-time 1.0 "$1"
     fi
+}
+
+# Encode stdin as a JSON string. Used only by Antigravity's PreInvocation
+# hook, whose stdout contract is JSON rather than raw context text.
+ai_memory_json_string() {
+    awk '
+        BEGIN { printf "\"" }
+        {
+            gsub(/\\/, "\\\\")
+            gsub(/"/, "\\\"")
+            gsub(/\r/, "\\r")
+            printf "%s%s", sep, $0
+            sep = "\\n"
+        }
+        END { printf "\"" }
+    '
 }
