@@ -1282,7 +1282,7 @@ mod tests {
             .unwrap_or_else(|| panic!("{} missing agent", path.display()))
             + agent_marker.len();
         let agent = rest[agent_start..]
-            .split(['"', '\'', ' ', '\n', '\r'])
+            .split(['"', '\'', ' ', '\n', '\r', '$'])
             .next()
             .unwrap_or_else(|| panic!("{} missing agent value", path.display()))
             .to_string();
