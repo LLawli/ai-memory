@@ -216,11 +216,11 @@ ssh "$SERVER" "tail -100 $DEPLOY_DIR/data/logs/ai-memory.log.$(date +%F)"
   `ai-memory status` healthcheck is failing. Most likely the data
   dir's permissions don't match the container's user (uid 1000). Fix
   with `sudo chown -R 1000:1000 $DEPLOY_DIR/data` on the host.
-- **Embedding mismatch refusing to start**: ai-memory refuses to boot
-  when the configured `(provider, model, dim)` for embeddings doesn't
-  match the stored pages' embeddings. Either revert the change or run
-  `ai-memory embed --reembed` (after starting with the old config or
-  doing a manual SQL fix) to migrate.
+- **Embedding mismatch after a model change**: startup logs a warning
+  when stored `(provider, model, dim)` triples differ from config.
+  Hybrid search ignores stale rows until they are re-embedded. Start
+  the server normally, then run `ai-memory embed --reembed` (or rely
+  on scheduled embedding backfill if enabled).
 - **Container restart loop**: check
   `docker logs ai-memory` - the `ai-memory starting` line at the top
   reports the resolved config; a missing required env var (e.g.
