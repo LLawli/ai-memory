@@ -444,10 +444,18 @@ async fn configure_embedder(
         )
         .await?;
     if !mismatch.is_empty() {
-        anyhow::bail!(
-            "embedding (provider, model, dim) mismatch with stored data: {:?} \
-             — run `ai-memory embed --reembed` to migrate",
-            mismatch
+        // Refuse-on-mismatch applies to hybrid search (queries only load
+        // rows matching the configured triple), not to process liveness.
+        // Blocking startup made `embed --reembed` impossible because the
+        // CLI is an HTTP client to this server.
+        tracing::warn!(
+            stored = ?mismatch,
+            configured_provider = cfg.provider.name(),
+            configured_model = %cfg.model,
+            configured_dim = cfg.dim,
+            "stored embeddings use a different (provider, model, dim) than configured; \
+             hybrid search ignores stale rows until pages are re-embedded — \
+             run `ai-memory embed --reembed` (or wait for scheduled backfill)"
         );
     }
     info!(
