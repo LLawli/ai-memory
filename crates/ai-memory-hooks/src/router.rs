@@ -287,22 +287,32 @@ async fn resolve_project_ids(
 
     let project_name = match (project_override, cwd_norm.as_deref()) {
         (Some(p), _) => p.to_string(),
-        (None, Some(c)) => match std::path::Path::new(c)
-            .file_name()
-            .and_then(|s| s.to_str())
-            .map(str::to_string)
-            .filter(|s| !s.is_empty())
-        {
-            Some(name) => name,
-            None => {
-                // Defensive: basename derivation failed (e.g. cwd is "/").
-                // Fall back to server defaults rather than hard-erroring.
-                state
-                    .active_project
-                    .set(state.workspace_id, state.project_id);
-                return Ok((state.workspace_id, state.project_id));
+        (None, Some(c)) => {
+            let path = std::path::Path::new(c);
+            // Resolve git repo root first — handles worktrees by following
+            // the .git gitdir pointer back to the main repository.
+            match ai_memory_consolidate::discover_main_repo_root(path)
+                .ok()
+                .and_then(|root| {
+                    root.file_name()
+                        .and_then(|s| s.to_str())
+                        .map(str::to_string)
+                })
+                .or_else(|| {
+                    path.file_name()
+                        .and_then(|s| s.to_str())
+                        .map(str::to_string)
+                        .filter(|s| !s.is_empty())
+                }) {
+                Some(name) => name,
+                None => {
+                    state
+                        .active_project
+                        .set(state.workspace_id, state.project_id);
+                    return Ok((state.workspace_id, state.project_id));
+                }
             }
-        },
+        }
         (None, None) => {
             // The early-return at the top of the function guards
             // against this branch; the explicit fallback here keeps
@@ -1185,5 +1195,36 @@ mod tests {
             .await
             .unwrap();
         assert_ne!(proj, proj2, "different basenames → different projects");
+    }
+
+    /// A bare repository must fall back to basename(cwd), not resolve
+    /// to the grandparent directory via commondir().parent().
+    #[tokio::test]
+    async fn bare_repo_falls_back_to_basename() {
+        let tmp = TempDir::new().unwrap();
+        let state = make_state(&tmp).await;
+
+        let bare_dir = tmp.path().join("my-bare-project.git");
+        git2::Repository::init_bare(&bare_dir).unwrap();
+        let cwd = bare_dir.to_str().unwrap();
+
+        let (_, proj) = resolve_project_ids(&state, Some(cwd), None, None)
+            .await
+            .unwrap();
+
+        // Must NOT be the server-default scratch project — basename should work.
+        assert_ne!(proj, state.project_id);
+
+        // The project name should come from basename, not from the grandparent.
+        // To verify: resolve with a different bare repo name and confirm different project.
+        let bare_dir2 = tmp.path().join("other-bare.git");
+        git2::Repository::init_bare(&bare_dir2).unwrap();
+        let (_, proj2) = resolve_project_ids(&state, Some(bare_dir2.to_str().unwrap()), None, None)
+            .await
+            .unwrap();
+        assert_ne!(
+            proj, proj2,
+            "different bare repo basenames → different projects"
+        );
     }
 }

@@ -536,6 +536,38 @@ pub fn discover_repo_root(start: &Path) -> Result<PathBuf, BootstrapError> {
         .ok_or_else(|| BootstrapError::NotARepo(start.to_path_buf()))
 }
 
+/// Like [`discover_repo_root`], but when `start` is inside a git
+/// worktree the function follows the `.git` commondir pointer back to
+/// the **main** repository root rather than returning the worktree's
+/// own working directory.
+///
+/// This is the right choice when the caller needs a stable identity
+/// for the repository (e.g. deriving a project name) — all worktrees
+/// of the same repo should resolve to the same root.
+///
+/// # Errors
+/// Returns `BootstrapError::NotARepo` when no repository is found
+/// at or above `start`.
+pub fn discover_main_repo_root(start: &Path) -> Result<PathBuf, BootstrapError> {
+    let repo = git2::Repository::discover(start)
+        .map_err(|_| BootstrapError::NotARepo(start.to_path_buf()))?;
+    // Bare repos have no working directory; `commondir()` IS the repo root
+    // (there is no `.git/` subdirectory), so `.parent()` would return the
+    // grandparent — wrong.  Fall back to basename(cwd) via NotARepo so the
+    // router handles it safely.
+    if repo.is_bare() {
+        return Err(BootstrapError::NotARepo(start.to_path_buf()));
+    }
+    // `commondir()` returns the shared .git directory.  For a regular
+    // checkout it equals `path()` (i.e. `<repo>/.git/`); for a
+    // worktree it points to the *main* repo's `.git/` — so its parent
+    // is always the main repository root.
+    repo.commondir()
+        .parent()
+        .map(Path::to_path_buf)
+        .ok_or_else(|| BootstrapError::NotARepo(start.to_path_buf()))
+}
+
 /// Read commits, format each as a one-paragraph entry. We include
 /// only commits with a substantive body (more than ~120 chars
 /// total) — drive-by typo-fix commits aren't worth tokens.
