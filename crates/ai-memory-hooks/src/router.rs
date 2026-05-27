@@ -353,9 +353,7 @@ async fn resolve_project_ids(
         // Split on both `/` and `\` so Windows paths sent to a Linux
         // server still resolve to the final component.
         let s = path.to_str()?;
-        let name = s
-            .rsplit(['/', '\\'])
-            .find(|seg| !seg.is_empty())?;
+        let name = s.rsplit(['/', '\\']).find(|seg| !seg.is_empty())?;
         if name.is_empty() {
             return None;
         }
