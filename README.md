@@ -281,6 +281,88 @@ for env vars and Ollama/OpenRouter examples, and
 [`docs/llm-provider-comparison.md`](docs/llm-provider-comparison.md)
 for the empirical model comparison.
 
+## Use a Claude Code subscription instead of an API key (claude-shim)
+
+If you already pay for a Claude Max or Pro subscription, you can route
+ai-memory's Anthropic LLM calls through `claude -p` (Claude Code's
+headless mode) and spend no API tokens. A small Rust shim in
+[`docker/claude-shim/`](docker/claude-shim/) translates Anthropic
+`/v1/messages` requests into `claude -p` subprocess invocations behind
+the scenes — ai-memory's existing `AnthropicProvider` is just
+redirected via `base_url`, so there is no special code path on the
+consumer side and the structured-output (`tool_use`) strategy survives
+the round-trip.
+
+### Setup
+
+```bash
+# 1. Generate a long-lived OAuth token on a machine where Claude Code
+#    is installed and logged in.
+claude setup-token             # prints sk-ant-oat-...
+
+# 2. From the repo root: copy the env template and paste the token.
+cp docker/.env.example docker/.env
+$EDITOR docker/.env            # set CLAUDE_CODE_OAUTH_TOKEN
+
+# 3. Bring up ai-memory + claude-shim together.
+cd docker
+docker compose --profile claude-shim up -d --build
+```
+
+The shim listens only on the internal `ai-memory-net` bridge (no port
+published to the host); ai-memory reaches it as
+`http://claude-shim:8080`. Activation is the three env vars baked into
+`docker/.env.example`:
+
+```
+AI_MEMORY_LLM_PROVIDER=anthropic
+AI_MEMORY_LLM_MODEL=claude-opus-4-7
+AI_MEMORY_LLM_BASE_URL=http://claude-shim:8080
+```
+
+Without the `claude-shim` compose profile, ai-memory falls back to
+`api.anthropic.com` as usual — the integration is opt-in.
+
+### Using the host CLI wrapper with this setup
+
+The stock `~/.local/bin/ai-memory` wrapper spawns a one-shot client
+container that needs to reach the running server by container name on
+`ai-memory-net`. Set these in your shell rc (e.g.
+`~/.bashrc.d/ai-memory.sh`):
+
+```bash
+export AI_MEMORY_IMAGE=ai-memory:local
+export AI_MEMORY_DOCKER_NETWORK=ai-memory-net
+export AI_MEMORY_SERVER_URL=http://ai-memory:49374
+```
+
+`AI_MEMORY_DOCKER_NETWORK` is a recent wrapper addition; if your
+wrapper predates it, pull the latest with `ai-memory upgrade` (or copy
+the script from the repo) and re-run.
+
+The compose file also widens the server's `AI_MEMORY_ALLOWED_HOSTS` to
+include `ai-memory` so sibling client containers don't trip the
+DNS-rebinding guard when they connect by container name.
+
+### Caveats
+
+- **Single-turn only** in v1 — fine for ai-memory's consolidation /
+  lint / bootstrap call sites, but no streaming or
+  `cache_control` breakpoints.
+- **Embeddings still need a real provider** — `claude -p` does not
+  generate embeddings. Ollama with `nomic-embed-text` is the
+  no-API-cost option; point at it with
+  `AI_MEMORY_EMBEDDING_BASE_URL=http://ollama:11434/v1`.
+- **Subscription TOS**: `claude -p` is Anthropic's officially supported
+  headless mode; personal and local use is the documented case.
+- **Cold-start overhead**: each LLM call spawns a fresh `claude -p`
+  subprocess (~1–2 s). Acceptable for consolidation; mitigation via a
+  long-lived `--input-format stream-json` session is future work.
+
+Full docs (architecture, structured-output strategy, smoke tests,
+upstream version pinning, troubleshooting) live in
+[`docker/claude-shim/README.md`](docker/claude-shim/README.md).
+
 ## Architecture
 
 One Rust binary runs an MCP/HTTP server and owns one data directory:

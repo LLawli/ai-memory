@@ -1,0 +1,49 @@
+# Standalone Cargo project (not a member of the ai-memory workspace).
+# Lives under docker/ as deployment infrastructure: the shim is built
+# inside its own Docker image, separate from the ai-memory binary.
+[workspace]
+
+[package]
+name = "claude-shim"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT"
+description = "Anthropic /v1/messages compatible HTTP shim that translates requests into `claude -p` subprocess invocations."
+
+[lib]
+name = "claude_shim"
+path = "src/lib.rs"
+
+[[bin]]
+name = "claude-shim"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+axum = "0.8"
+clap = { version = "4", features = ["derive", "env"] }
+jsonschema = { version = "0.30", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["full"] }
+tower = { version = "0.5", features = ["util"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+tempfile = "3"
+tower = { version = "0.5", features = ["util"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }

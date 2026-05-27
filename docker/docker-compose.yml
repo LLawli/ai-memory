@@ -7,6 +7,12 @@
 # State persists in the `ai-memory-data` volume; move it between hosts
 # by stopping the container, `docker volume export` (or rsync the
 # mountpoint), and importing on the target.
+#
+# Optional: route all Anthropic LLM calls through a local claude-shim
+# that uses `claude -p` + an OAuth token instead of the official API key.
+# See docker/claude-shim/README.md for setup. Activate with:
+#   docker compose --profile claude-shim up -d
+# and provide CLAUDE_CODE_OAUTH_TOKEN via a .env file alongside this one.
 
 services:
   ai-memory:
@@ -17,6 +23,8 @@ services:
     container_name: ai-memory
     restart: unless-stopped
     user: "1000:1000"
+    networks:
+      - ai-memory-net
     volumes:
       - ai-memory-data:/data
     ports:
@@ -25,12 +33,61 @@ services:
       - "127.0.0.1:49374:49374"
     environment:
       - RUST_LOG=ai_memory=info,ai_memory_store=info,ai_memory_wiki=info,ai_memory_mcp=info,tracing_appender=warn
+      # Activates the LLM-backed paths (memory_consolidate, lint LLM
+      # pass, bootstrap). Leave unset to fall back to rule-based only.
+      - AI_MEMORY_LLM_PROVIDER=${AI_MEMORY_LLM_PROVIDER:-}
+      - AI_MEMORY_LLM_MODEL=${AI_MEMORY_LLM_MODEL:-}
+      # When the claude-shim profile is active, point the Anthropic
+      # client at it. Figment maps AI_MEMORY_LLM_BASE_URL onto
+      # Config.llm_base_url, which flows into ProviderConfig.base_url
+      # and through to AnthropicProvider::with_base_url. Empty by
+      # default so the binary falls back to api.anthropic.com.
+      - AI_MEMORY_LLM_BASE_URL=${AI_MEMORY_LLM_BASE_URL:-}
+      # The AnthropicProvider refuses to construct without an API key
+      # set, even when the base URL points to a local shim that ignores
+      # it. The placeholder satisfies the construction-time check; the
+      # shim does not validate the header.
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-shim-noauth}
+      # Allow Host: ai-memory in addition to the loopback defaults so
+      # sibling containers on ai-memory-net (e.g. the host CLI wrapper
+      # joined to this network for bootstrap) can reach the server
+      # without tripping the DNS-rebinding allowlist.
+      - AI_MEMORY_ALLOWED_HOSTS=localhost,127.0.0.1,::1,ai-memory
     healthcheck:
       test: ["CMD", "/usr/local/bin/ai-memory", "status"]
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 5s
+
+  claude-shim:
+    profiles: ["claude-shim"]
+    image: claude-shim:local
+    build:
+      context: ./claude-shim
+      dockerfile: Dockerfile
+    container_name: claude-shim
+    restart: unless-stopped
+    networks:
+      - ai-memory-net
+    # Internal-only: no `ports:` mapping. ai-memory reaches it as
+    # http://claude-shim:8080 over the bridge network.
+    expose:
+      - "8080"
+    environment:
+      - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN}
+      - RUST_LOG=claude_shim=info
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/claude-shim", "--healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+networks:
+  ai-memory-net:
+    name: ai-memory-net
+    driver: bridge
 
 volumes:
   ai-memory-data:

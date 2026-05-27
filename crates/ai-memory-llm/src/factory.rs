@@ -141,7 +141,11 @@ pub fn build_provider(config: ProviderConfig) -> LlmResult<Arc<dyn LlmProvider>>
             let key = config
                 .api_key
                 .ok_or_else(|| LlmError::NotConfigured("ANTHROPIC_API_KEY".into()))?;
-            Ok(Arc::new(AnthropicProvider::new(key, config.model)?))
+            let mut provider = AnthropicProvider::new(key, config.model)?;
+            if let Some(url) = config.base_url {
+                provider = provider.with_base_url(url);
+            }
+            Ok(Arc::new(provider))
         }
         ProviderChoice::OpenAi => {
             let key = config
