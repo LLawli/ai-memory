@@ -169,7 +169,11 @@ pub fn build_provider(config: ProviderConfig) -> LlmResult<Arc<dyn LlmProvider>>
     match config.provider {
         ProviderChoice::Anthropic => {
             let key = config.auth.require_api_key()?;
-            Ok(Arc::new(AnthropicProvider::new(key, config.model)?))
+            let mut provider = AnthropicProvider::new(key, config.model)?;
+            if let Some(url) = config.base_url {
+                provider = provider.with_base_url(url);
+            }
+            Ok(Arc::new(provider))
         }
         ProviderChoice::OpenAi => {
             let key = config.auth.require_api_key()?;
